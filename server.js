@@ -143,7 +143,7 @@ async function proxyFunding(res, requestUrl) {
 
 async function marketStats(res, requestUrl) {
   const limit = clamp(Number(requestUrl.searchParams.get("limit") || 120), 20, 300);
-  const historyLimit = clamp(Number(requestUrl.searchParams.get("historyLimit") || limit), 0, limit);
+  const historyLimit = clamp(Number(requestUrl.searchParams.get("historyLimit") || limit), 0, 300);
   const cacheKey = `${limit}:${historyLimit}`;
   const cached = marketCache.get(cacheKey);
   if (cached && Date.now() - cached.time < 55000) {
@@ -187,17 +187,9 @@ async function marketStats(res, requestUrl) {
       })
       .sort((a, b) => b.annualized - a.annualized);
 
-    const positiveLimit = Math.ceil(limit / 2);
-    const negativeLimit = Math.floor(limit / 2);
-    const positiveRows = allRows
-      .filter((row) => row.annualized >= 0)
-      .sort((a, b) => b.annualized - a.annualized)
-      .slice(0, positiveLimit);
-    const negativeRows = allRows
-      .filter((row) => row.annualized < 0)
-      .sort((a, b) => a.annualized - b.annualized)
-      .slice(0, negativeLimit);
-    const baseRows = [...positiveRows, ...negativeRows].slice(0, limit);
+    const baseRows = historyLimit > limit
+      ? selectExtremes(allRows, "annualized", historyLimit)
+      : selectExtremes(allRows, "annualized", limit);
 
     const historyRows = baseRows.slice(0, historyLimit);
     const start30d = now - 30 * 86400000;
@@ -220,15 +212,10 @@ async function marketStats(res, requestUrl) {
     });
 
     if (staleHistoryRows.length) {
-      const fetchedHistoryMap = await batchFetch(
-        "funding",
+      const fetchedHistoryMap = await batchFundingHistories(
         staleHistoryRows.map((row) => row.symbol),
-        {
-          startTime: Math.floor(start30d),
-          endTime: Math.floor(now),
-          limit: 1000,
-          pauseMs: 120,
-        },
+        start30d,
+        now,
       );
       staleHistoryRows.forEach((row) => {
         const fetchedHistory = Array.isArray(fetchedHistoryMap[row.symbol])
@@ -267,9 +254,9 @@ async function marketStats(res, requestUrl) {
       row.exactHistory = true;
     });
 
-    const rows = baseRows
-      .sort((a, b) => b.annualized - a.annualized)
-      .slice(0, limit);
+    const rows = historyLimit > limit
+      ? selectMultiMetricExtremes(baseRows, ["annualized", "sum7d", "sum30d"], limit)
+      : [...baseRows].sort((a, b) => b.annualized - a.annualized).slice(0, limit);
 
     const openInterestRows = rows.slice(0, Math.min(limit, 100));
     const openInterestMap = await batchFetch("openInterest", openInterestRows.map((row) => row.symbol));
@@ -357,6 +344,44 @@ function inferIntervalFromHistory(history) {
   return [...buckets.entries()].sort((a, b) => b[1] - a[1])[0][0];
 }
 
+function selectExtremes(rows, metric, limit) {
+  const positiveLimit = Math.ceil(limit / 2);
+  const negativeLimit = Math.floor(limit / 2);
+  const positives = rows
+    .filter((row) => Number(row[metric]) >= 0)
+    .sort((a, b) => (Number(b[metric]) || 0) - (Number(a[metric]) || 0))
+    .slice(0, positiveLimit);
+  const negatives = rows
+    .filter((row) => Number(row[metric]) < 0)
+    .sort((a, b) => (Number(a[metric]) || 0) - (Number(b[metric]) || 0))
+    .slice(0, negativeLimit);
+  return [...positives, ...negatives];
+}
+
+function selectMultiMetricExtremes(rows, metrics, limit) {
+  const bySymbol = new Map();
+  const perSideMetricLimit = Math.max(6, Math.ceil(limit / metrics.length / 2));
+  metrics.forEach((metric) => {
+    selectExtremes(rows, metric, perSideMetricLimit * 2).forEach((row) => {
+      bySymbol.set(row.symbol, row);
+    });
+  });
+
+  const selected = [...bySymbol.values()];
+  if (selected.length < limit) {
+    selectExtremes(rows, "annualized", limit).forEach((row) => {
+      if (selected.length < limit && !bySymbol.has(row.symbol)) {
+        bySymbol.set(row.symbol, row);
+        selected.push(row);
+      }
+    });
+  }
+
+  return selected
+    .sort((a, b) => (Number(b.annualized) || 0) - (Number(a.annualized) || 0))
+    .slice(0, limit);
+}
+
 function sumFundingRates(history, startTime, endTime) {
   return (Array.isArray(history) ? history : []).reduce((sum, row) => {
     const time = Number(row.fundingTime);
@@ -381,6 +406,23 @@ async function fundingHistory(symbol, startTime, endTime) {
   url.searchParams.set("limit", "1000");
   const history = await requestJson(url.toString());
   return Array.isArray(history) ? history : [];
+}
+
+async function batchFundingHistories(symbols, startTime, endTime) {
+  const uniqueSymbols = [...new Set(symbols.filter(Boolean))];
+  const result = {};
+  await mapWithConcurrency(
+    uniqueSymbols.map((symbol) => ({ symbol })),
+    8,
+    async (item) => {
+      try {
+        result[item.symbol] = await fundingHistory(item.symbol, startTime, endTime);
+      } catch (error) {
+        result[item.symbol] = null;
+      }
+    },
+  );
+  return result;
 }
 
 async function recentFundingHistory(symbol, limit = 8) {

@@ -393,7 +393,7 @@ async function refreshMarketStats() {
 
 async function loadFullMarketHistory() {
   try {
-    const response = await fetch("/api/marketStats?limit=120&historyLimit=120");
+    const response = await fetch("/api/marketStats?limit=120&historyLimit=160");
     if (!response.ok) throw new Error(`Aster API returned ${response.status}`);
     const payload = await response.json();
     state.market = Array.isArray(payload.rows) ? payload.rows : [];
