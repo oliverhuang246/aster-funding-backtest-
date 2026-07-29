@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aster Funding Backtest</title>
+    <meta
+      name="description"
+      content="Aster perpetual funding rate dashboard and backtest panel."
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">ASTER FUNDING DASHBOARD</p>
+          <h1>Aster 资金费率统计与回测</h1>
+          <p class="hero-copy">
+            默认刷新全市场费率排行，也可以点选任意交易对做资金费回测。
+          </p>
+        </div>
+        <div class="source-pill">
+          <span>数据源</span>
+          <strong>fapi.asterdex.com</strong>
+          <small id="marketUpdated"></small>
+        </div>
+      </section>
+
+      <section class="panel market-panel">
+        <div class="panel-title market-title">
+          <div>
+            <h2>Aster 市场资金费率排名</h2>
+            <p>默认按年化资金费率排序，点击表头可切换排序，点击交易对可带入下方回测。</p>
+          </div>
+          <div class="market-actions">
+            <span id="marketStatus"></span>
+            <button id="refreshMarketBtn" type="button">刷新</button>
+          </div>
+        </div>
+
+        <div class="market-summary" aria-label="全市场资金费率摘要">
+          <article>
+            <span>交易对</span>
+            <strong id="marketCount">0</strong>
+          </article>
+          <article>
+            <span>正费率</span>
+            <strong id="marketPositive">0</strong>
+          </article>
+          <article>
+            <span>负费率</span>
+            <strong id="marketNegative">0</strong>
+          </article>
+          <article>
+            <span>最高年化</span>
+            <strong id="marketTopApr">0.00%</strong>
+          </article>
+        </div>
+
+        <div class="table-wrap market-wrap">
+          <table class="market-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th data-sort="symbol">币种 <span class="sort-arrow">↕</span></th>
+                <th data-sort="price">价格 <span class="sort-arrow">↕</span></th>
+                <th data-sort="fundingRate">资金费率 <span class="sort-arrow">↕</span></th>
+                <th data-sort="annualized">年化 <span class="sort-arrow">↓</span></th>
+                <th data-sort="intervalHours">结算间隔 <span class="sort-arrow">↕</span></th>
+                <th data-sort="openInterestUsd">持仓量 <span class="sort-arrow">↕</span></th>
+                <th data-sort="quoteVolume">24H 成交量 <span class="sort-arrow">↕</span></th>
+                <th data-sort="sum7d">7日累计费率 <span class="sort-arrow">↕</span></th>
+                <th data-sort="sum30d">30日累计费率 <span class="sort-arrow">↕</span></th>
+              </tr>
+            </thead>
+            <tbody id="marketRows">
+              <tr>
+                <td colspan="10" class="empty"></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <aside class="panel controls" aria-label="回测参数">
+          <div class="panel-title">
+            <h2>回测参数</h2>
+            <span id="dataStatus"></span>
+          </div>
+
+          <label>
+            <span>合约</span>
+            <input id="symbol" value="BTCUSDT" autocomplete="off" />
+          </label>
+
+          <div class="grid-two">
+            <label>
+              <span>开始日期</span>
+              <input id="startDate" type="date" />
+            </label>
+            <label>
+              <span>结束日期</span>
+              <input id="endDate" type="date" />
+            </label>
+          </div>
+
+          <label>
+            <span>仓位方向</span>
+            <select id="side">
+              <option value="short">做空收正费率 / 付负费率</option>
+              <option value="long">做多付正费率 / 收负费率</option>
+            </select>
+          </label>
+
+          <div class="grid-two">
+            <label>
+              <span>名义本金 USDT</span>
+              <input id="notional" type="number" value="10000" min="1" step="100" />
+            </label>
+            <label>
+              <span>资金费周期</span>
+              <input id="intervalHours" type="hidden" value="8" />
+              <div id="intervalDisplay" class="readonly-field"></div>
+              <small id="intervalSource" class="field-note"></small>
+            </label>
+          </div>
+
+          <div class="grid-two">
+            <label>
+              <span>开仓成本 bps</span>
+              <input id="entryCostBps" type="number" value="2" min="0" step="0.1" />
+            </label>
+            <label>
+              <span>平仓成本 bps</span>
+              <input id="exitCostBps" type="number" value="2" min="0" step="0.1" />
+            </label>
+          </div>
+
+          <label class="toggle">
+            <input id="compound" type="checkbox" />
+            <span>收益滚入本金</span>
+          </label>
+
+          <div class="actions">
+            <button id="fetchBtn" class="primary">获取 Aster 数据</button>
+            <button id="sampleBtn" type="button">示例数据</button>
+            <button id="exportBtn" type="button">导出 CSV</button>
+          </div>
+
+          <p class="hint">
+            下方回测只计算资金费和开平仓成本，不包含价格波动、滑点扩大、强平或保证金占用变化。
+          </p>
+        </aside>
+
+        <section class="main-panel">
+          <div class="metrics" aria-label="回测结果指标">
+            <article>
+              <span>资金费盈亏</span>
+              <strong id="totalPnl">$0.00</strong>
+              <small id="pnlCaption"></small>
+            </article>
+            <article>
+              <span>年化收益率</span>
+              <strong id="apr">0.00%</strong>
+              <small>按实际回测天数折算</small>
+            </article>
+            <article>
+              <span>最大回撤</span>
+              <strong id="drawdown">0.00%</strong>
+              <small>基于资金费累计盈亏</small>
+            </article>
+            <article>
+              <span>结算次数</span>
+              <strong id="periods">0</strong>
+              <small id="dateRange">暂无区间</small>
+            </article>
+          </div>
+
+          <div class="panel chart-panel">
+            <div class="panel-title">
+              <h2>资金费率走势图</h2>
+              <div class="chart-tools">
+                <span id="chartCaption"></span>
+                <button class="chart-range active" type="button" data-range="7">7天</button>
+                <button class="chart-range" type="button" data-range="14">14天</button>
+                <button class="chart-range" type="button" data-range="all">全部</button>
+              </div>
+            </div>
+            <div class="chart-canvas-wrap">
+              <canvas id="equityChart" width="1100" height="440" aria-label="资金费率走势图"></canvas>
+              <div id="chartTooltip" class="chart-tooltip" hidden></div>
+            </div>
+          </div>
+
+          <div class="split">
+            <div class="panel">
+              <div class="panel-title">
+                <h2>费率分布</h2>
+                <span id="rateSummary">暂无</span>
+              </div>
+              <div class="bars">
+                <div>
+                  <span>正费率</span>
+                  <div class="bar-track"><i id="positiveBar"></i></div>
+                  <strong id="positiveCount">0</strong>
+                </div>
+                <div>
+                  <span>负费率</span>
+                  <div class="bar-track"><i id="negativeBar"></i></div>
+                  <strong id="negativeCount">0</strong>
+                </div>
+                <div>
+                  <span>零费率</span>
+                  <div class="bar-track"><i id="flatBar"></i></div>
+                  <strong id="flatCount">0</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-title">
+                <h2>策略说明</h2>
+                <span>简化模型</span>
+              </div>
+              <p class="model-copy">
+                做空在资金费率为正时收到资金费，做多在资金费率为负时收到资金费。结果仅用于快速评估资金费 carry。
+              </p>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-title">
+          <h2>结算明细</h2>
+          <span id="tableCount">0 条</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>合约</th>
+                <th>资金费率</th>
+                <th>单期盈亏</th>
+                <th>累计盈亏</th>
+              </tr>
+            </thead>
+            <tbody id="rows">
+              <tr>
+                <td colspan="5" class="empty">加载数据后显示逐期资金费记录</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
