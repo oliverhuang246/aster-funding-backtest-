@@ -7,6 +7,9 @@ const state = {
   marketSort: { key: "annualized", dir: "desc" },
   marketTimer: null,
   marketLoading: false,
+  marketSearchTimer: null,
+  marketSearchRow: null,
+  marketSearchLoading: false,
   contractMeta: new Map(),
   chartRange: "7",
   chartHoverIndex: null,
@@ -49,6 +52,7 @@ const el = {
   chart: document.querySelector("#equityChart"),
   chartTooltip: document.querySelector("#chartTooltip"),
   marketRows: document.querySelector("#marketRows"),
+  marketSearch: document.querySelector("#marketSearch"),
   refreshMarketBtn: document.querySelector("#refreshMarketBtn"),
   marketStatus: document.querySelector("#marketStatus"),
   marketUpdated: document.querySelector("#marketUpdated"),
@@ -365,7 +369,7 @@ async function refreshMarketStats() {
   el.refreshMarketBtn.disabled = true;
   el.marketStatus.textContent = "";
   try {
-    const response = await fetch("/api/marketStats?limit=120&historyLimit=0");
+    const response = await fetch("/api/marketStats?limit=200&historyLimit=0");
     if (!response.ok) throw new Error(`Aster 鎺ュ彛杩斿洖 ${response.status}`);
     const payload = await response.json();
     state.market = Array.isArray(payload.rows) ? payload.rows : [];
@@ -393,7 +397,7 @@ async function refreshMarketStats() {
 
 async function loadFullMarketHistory() {
   try {
-    const response = await fetch("/api/marketStats?limit=120&historyLimit=160");
+    const response = await fetch("/api/marketStats?limit=200&historyLimit=260");
     if (!response.ok) throw new Error(`Aster API returned ${response.status}`);
     const payload = await response.json();
     state.market = Array.isArray(payload.rows) ? payload.rows : [];
@@ -414,8 +418,49 @@ async function loadFullMarketHistory() {
   }
 }
 
+function scheduleMarketSearch() {
+  if (!el.marketSearch) return;
+  const query = marketSearchQuery();
+  state.marketSearchRow = null;
+  window.clearTimeout(state.marketSearchTimer);
+  renderMarket();
+  if (!query) return;
+
+  const normalized = normalizeMarketQuery(query);
+  const exactLocal = state.market.some((row) => String(row.symbol || "").toUpperCase() === normalized);
+  if (exactLocal || query.length < 2) return;
+
+  state.marketSearchTimer = window.setTimeout(() => searchMarketSymbol(normalized), 350);
+}
+
+async function searchMarketSymbol(symbol) {
+  if (!symbol) return;
+  state.marketSearchLoading = true;
+  renderMarket();
+  try {
+    const url = new URL("/api/marketSymbol", location.origin);
+    url.searchParams.set("symbol", symbol);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Aster API returned ${response.status}`);
+    const payload = await response.json();
+    state.marketSearchRow = payload.row || null;
+    if (state.marketSearchRow?.symbol && state.marketSearchRow?.intervalHours) {
+      state.contractMeta.set(state.marketSearchRow.symbol, {
+        intervalHours: state.marketSearchRow.intervalHours,
+        sourceText: "来自 Aster 全市场查询",
+      });
+    }
+  } catch (error) {
+    state.marketSearchRow = null;
+  } finally {
+    state.marketSearchLoading = false;
+    renderMarket();
+  }
+}
+
 function renderMarket() {
-  const rows = [...state.market].sort((a, b) => compareMarket(a, b));
+  const query = marketSearchQuery();
+  const rows = marketRowsForQuery(query).sort((a, b) => compareMarket(a, b));
   const positive = rows.filter((row) => row.fundingRate > 0).length;
   const negative = rows.filter((row) => row.fundingRate < 0).length;
   const top = rows.reduce((best, row) => (!best || row.annualized > best.annualized ? row : best), null);
@@ -428,7 +473,10 @@ function renderMarket() {
   el.marketTopApr.className = top ? signedClass(top.annualized) : "";
 
   if (!rows.length) {
-    el.marketRows.innerHTML = '<tr><td colspan="10" class="empty">鏆傛棤甯傚満鏁版嵁</td></tr>';
+    const message = query
+      ? (state.marketSearchLoading ? "正在查询 Aster 全市场..." : "未找到该合约")
+      : "暂无市场数据";
+    el.marketRows.innerHTML = `<tr><td colspan="10" class="empty">${message}</td></tr>`;
     return;
   }
 
@@ -448,6 +496,29 @@ function renderMarket() {
       </tr>`,
     )
     .join("");
+}
+
+function marketSearchQuery() {
+  return (el.marketSearch?.value || "").trim().toUpperCase();
+}
+
+function normalizeMarketQuery(query) {
+  const compact = String(query || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!compact) return "";
+  return compact.endsWith("USDT") || compact.endsWith("USD") ? compact : `${compact}USDT`;
+}
+
+function marketRowsForQuery(query) {
+  if (!query) return [...state.market];
+  const normalized = normalizeMarketQuery(query);
+  const localRows = state.market.filter((row) => {
+    const symbol = String(row.symbol || "").toUpperCase();
+    return symbol.includes(query) || symbol === normalized;
+  });
+  const searchRows = state.marketSearchRow ? [state.marketSearchRow] : [];
+  const merged = new Map();
+  [...searchRows, ...localRows].forEach((row) => merged.set(row.symbol, row));
+  return [...merged.values()];
 }
 
 function compareMarket(a, b) {
@@ -823,6 +894,7 @@ el.symbol.addEventListener("blur", () => loadContractMeta(currentSymbol()));
 el.sampleBtn.addEventListener("click", () => updateUi(buildSample(), "绀轰緥鏁版嵁"));
 el.exportBtn.addEventListener("click", exportCsv);
 el.refreshMarketBtn.addEventListener("click", refreshMarketStats);
+el.marketSearch?.addEventListener("input", scheduleMarketSearch);
 el.marketRows.addEventListener("click", (event) => {
   const button = event.target.closest("[data-symbol]");
   if (button) selectMarketSymbol(button.dataset.symbol);

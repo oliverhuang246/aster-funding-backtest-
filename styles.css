@@ -202,6 +202,21 @@ h1 {
   white-space: nowrap;
 }
 
+.market-search {
+  width: 220px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  padding: 0 12px;
+  font-weight: 700;
+}
+
+.market-search::placeholder {
+  color: #8a9691;
+}
+
 .market-actions button,
 .actions button {
   height: 42px;

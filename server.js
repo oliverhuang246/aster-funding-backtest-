@@ -164,7 +164,7 @@ async function marketStats(res, requestUrl) {
     const marketTime = Math.max(...premium.map((row) => Number(row.time)).filter(Number.isFinite));
     const now = Number.isFinite(marketTime) ? marketTime : Date.now();
     const allRows = (Array.isArray(premium) ? premium : [])
-      .filter((row) => row.symbol && Number(row.lastFundingRate) !== 0)
+      .filter((row) => row.symbol && Number.isFinite(Number(row.lastFundingRate)))
       .map((row) => {
         const tickerRow = tickerMap.get(row.symbol) || {};
         const fundingRate = Number(row.lastFundingRate) || 0;
@@ -316,6 +316,72 @@ async function contractMeta(res, requestUrl) {
   }
 }
 
+async function marketSymbol(res, requestUrl) {
+  const symbol = normalizeSymbol(requestUrl.searchParams.get("symbol"));
+  if (!symbol) {
+    send(res, 400, JSON.stringify({ error: "Missing symbol" }), {
+      "content-type": "application/json",
+      "access-control-allow-origin": "*",
+    });
+    return;
+  }
+
+  try {
+    const [premium, ticker] = await Promise.all([
+      requestJson(`${ASTER}/fapi/v1/premiumIndex?symbol=${encodeURIComponent(symbol)}`),
+      requestJson(`${ASTER}/fapi/v1/ticker/24hr?symbol=${encodeURIComponent(symbol)}`),
+    ]);
+
+    if (!premium?.symbol) {
+      send(res, 404, JSON.stringify({ error: "Symbol not found" }), {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+      });
+      return;
+    }
+
+    const now = Number(premium.time) || Date.now();
+    const start30d = now - 30 * 86400000;
+    const start7d = now - 7 * 86400000;
+    const history = await fundingHistory(symbol, start30d, now);
+    const fallbackInterval = inferIntervalHours(premium);
+    const intervalHours = inferIntervalFromHistory(history) || fallbackInterval;
+    const fundingRate = Number(premium.lastFundingRate) || 0;
+    const price = Number(ticker.lastPrice || premium.markPrice || premium.indexPrice || 0);
+    const openInterest = await fetchOpenInterest(symbol).catch(() => 0);
+    const row = {
+      symbol: premium.symbol,
+      price,
+      fundingRate,
+      annualized: fundingRate * (24 / intervalHours) * 365,
+      intervalHours,
+      openInterestUsd: openInterest * price,
+      quoteVolume: Number(ticker.quoteVolume || 0),
+      sum7d: history.length
+        ? sumFundingRates(history, start7d, now)
+        : fundingRate * (24 / intervalHours) * 7,
+      sum30d: history.length
+        ? sumFundingRates(history, start30d, now)
+        : fundingRate * (24 / intervalHours) * 30,
+      exactHistory: Boolean(history.length),
+      nextFundingTime: Number(premium.nextFundingTime) || null,
+    };
+
+    send(res, 200, JSON.stringify({ updatedAt: new Date().toISOString(), row }), {
+      "content-type": "application/json",
+      "access-control-allow-origin": "*",
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+}
+
+function normalizeSymbol(value) {
+  const compact = String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!compact) return "";
+  return compact.endsWith("USDT") || compact.endsWith("USD") ? compact : `${compact}USDT`;
+}
+
 function inferIntervalHours(row) {
   const now = Number(row.time);
   const next = Number(row.nextFundingTime);
@@ -355,7 +421,19 @@ function selectExtremes(rows, metric, limit) {
     .filter((row) => Number(row[metric]) < 0)
     .sort((a, b) => (Number(a[metric]) || 0) - (Number(b[metric]) || 0))
     .slice(0, negativeLimit);
-  return [...positives, ...negatives];
+  const selected = new Map();
+  [...positives, ...negatives].forEach((row) => selected.set(row.symbol, row));
+  if (selected.size < limit) {
+    rows
+      .slice()
+      .sort((a, b) => (Number(b[metric]) || 0) - (Number(a[metric]) || 0))
+      .forEach((row) => {
+        if (selected.size < limit && !selected.has(row.symbol)) {
+          selected.set(row.symbol, row);
+        }
+      });
+  }
+  return [...selected.values()];
 }
 
 function selectMultiMetricExtremes(rows, metrics, limit) {
@@ -510,6 +588,10 @@ http
     }
     if (requestUrl.pathname === "/api/contractMeta") {
       contractMeta(res, requestUrl);
+      return;
+    }
+    if (requestUrl.pathname === "/api/marketSymbol") {
+      marketSymbol(res, requestUrl);
       return;
     }
     serveFile(res, requestUrl);
