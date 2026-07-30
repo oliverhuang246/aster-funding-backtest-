@@ -160,19 +160,22 @@ async function marketStats(res, requestUrl) {
       requestJson(`${ASTER}/fapi/v1/ticker/24hr`),
     ]);
 
-    const tickerMap = new Map((Array.isArray(ticker) ? ticker : []).map((row) => [row.symbol, row]));
+    const tickerMap = new Map(
+      (Array.isArray(ticker) ? ticker : []).map((row) => [cleanSymbol(row.symbol), row]),
+    );
     const marketTime = Math.max(...premium.map((row) => Number(row.time)).filter(Number.isFinite));
     const now = Number.isFinite(marketTime) ? marketTime : Date.now();
     const allRows = (Array.isArray(premium) ? premium : [])
       .filter((row) => row.symbol && Number.isFinite(Number(row.lastFundingRate)))
       .map((row) => {
-        const tickerRow = tickerMap.get(row.symbol) || {};
+        const symbol = cleanSymbol(row.symbol);
+        const tickerRow = tickerMap.get(symbol) || {};
         const fundingRate = Number(row.lastFundingRate) || 0;
         const price = Number(tickerRow.lastPrice || row.markPrice || row.indexPrice || 0);
         const openInterest = Number(row.openInterest || 0);
         const fallbackInterval = inferIntervalHours(row);
         return {
-          symbol: row.symbol,
+          symbol,
           price,
           fundingRate,
           annualized: fundingRate * (24 / fallbackInterval) * 365,
@@ -350,7 +353,7 @@ async function marketSymbol(res, requestUrl) {
     const price = Number(ticker.lastPrice || premium.markPrice || premium.indexPrice || 0);
     const openInterest = await fetchOpenInterest(symbol).catch(() => 0);
     const row = {
-      symbol: premium.symbol,
+      symbol: cleanSymbol(premium.symbol),
       price,
       fundingRate,
       annualized: fundingRate * (24 / intervalHours) * 365,
@@ -380,6 +383,19 @@ function normalizeSymbol(value) {
   const compact = String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (!compact) return "";
   return compact.endsWith("USDT") || compact.endsWith("USD") ? compact : `${compact}USDT`;
+}
+
+function cleanSymbol(value) {
+  const symbol = String(value || "");
+  if (/[\u4e00-\u9fff]/.test(symbol) || /^[\x00-\x7F]+$/.test(symbol)) {
+    return symbol;
+  }
+  try {
+    const decoded = Buffer.from(symbol, "latin1").toString("utf8");
+    return /[\u4e00-\u9fff]/.test(decoded) && !decoded.includes("�") ? decoded : symbol;
+  } catch (error) {
+    return symbol;
+  }
 }
 
 function inferIntervalHours(row) {

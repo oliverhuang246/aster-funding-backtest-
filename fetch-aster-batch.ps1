@@ -15,6 +15,7 @@ param(
 )
 
 $ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $symbolList = $Symbols -split ',' | Where-Object { $_ -ne '' }
 $result = @{}
 
