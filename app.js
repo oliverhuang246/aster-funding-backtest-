@@ -367,7 +367,10 @@ async function refreshMarketStats() {
   if (state.marketLoading) return;
   state.marketLoading = true;
   el.refreshMarketBtn.disabled = true;
-  el.marketStatus.textContent = "";
+  el.marketStatus.textContent = "刷新中...";
+  if (!state.market.length) {
+    el.marketRows.innerHTML = `<tr><td colspan="10" class="empty">正在加载市场数据...</td></tr>`;
+  }
   try {
     const response = await fetch("/api/marketStats?limit=200&historyLimit=0");
     if (!response.ok) throw new Error(`Aster 鎺ュ彛杩斿洖 ${response.status}`);
