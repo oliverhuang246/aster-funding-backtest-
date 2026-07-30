@@ -372,7 +372,11 @@ async function refreshMarketStats() {
     el.marketRows.innerHTML = `<tr><td colspan="10" class="empty">正在加载市场数据...</td></tr>`;
   }
   try {
-    const response = await fetch("/api/marketStats?limit=200&historyLimit=0");
+    const quickUrl = new URL("/api/marketStats", location.origin);
+    quickUrl.searchParams.set("limit", "200");
+    quickUrl.searchParams.set("historyLimit", "0");
+    quickUrl.searchParams.set("_", String(Date.now()));
+    const response = await fetch(quickUrl, { cache: "no-store" });
     if (!response.ok) throw new Error(`Aster 鎺ュ彛杩斿洖 ${response.status}`);
     const payload = await response.json();
     state.market = Array.isArray(payload.rows) ? payload.rows : [];
@@ -400,7 +404,11 @@ async function refreshMarketStats() {
 
 async function loadFullMarketHistory() {
   try {
-    const response = await fetch("/api/marketStats?limit=200&historyLimit=260");
+    const historyUrl = new URL("/api/marketStats", location.origin);
+    historyUrl.searchParams.set("limit", "200");
+    historyUrl.searchParams.set("historyLimit", "260");
+    historyUrl.searchParams.set("_", String(Date.now()));
+    const response = await fetch(historyUrl, { cache: "no-store" });
     if (!response.ok) throw new Error(`Aster API returned ${response.status}`);
     const payload = await response.json();
     state.market = Array.isArray(payload.rows) ? payload.rows : [];

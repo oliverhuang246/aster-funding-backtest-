@@ -150,6 +150,7 @@ async function marketStats(res, requestUrl) {
     send(res, 200, cached.body, {
       "content-type": "application/json",
       "access-control-allow-origin": "*",
+      "cache-control": "no-store",
     });
     return;
   }
@@ -276,6 +277,7 @@ async function marketStats(res, requestUrl) {
     send(res, 200, body, {
       "content-type": "application/json",
       "access-control-allow-origin": "*",
+      "cache-control": "no-store",
     });
   } catch (error) {
     sendError(res, error);
@@ -566,6 +568,7 @@ function sendError(res, error) {
     {
       "content-type": "application/json",
       "access-control-allow-origin": "*",
+      "cache-control": "no-store",
     },
   );
 }
@@ -587,6 +590,7 @@ function serveFile(res, requestUrl) {
     }
     send(res, 200, data, {
       "content-type": types[path.extname(file)] || "application/octet-stream",
+      "cache-control": "no-store",
     });
   });
 }
