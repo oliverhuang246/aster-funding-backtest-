@@ -261,7 +261,7 @@ async function marketStats(res, requestUrl) {
       ? selectMultiMetricExtremes(baseRows, ["annualized", "sum7d", "sum30d"], limit)
       : [...baseRows].sort((a, b) => b.annualized - a.annualized).slice(0, limit);
 
-    const openInterestRows = rows.slice(0, Math.min(limit, 100));
+    const openInterestRows = rows.slice(0, limit);
     const openInterestMap = await batchFetch("openInterest", openInterestRows.map((row) => row.symbol));
     openInterestRows.forEach((row) => {
       const openInterestValue = Number(openInterestMap[row.symbol]?.openInterest) || 0;
