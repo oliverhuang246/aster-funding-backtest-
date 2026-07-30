@@ -74,53 +74,70 @@ async function requestText(url) {
     if (!response.ok) throw new Error(body || `HTTP ${response.status}`);
     return body;
   } catch (error) {
-    return fetchPowerShell(url);
+    if (process.platform === "win32") {
+      return fetchPowerShell(url);
+    }
+    throw error;
   }
 }
 
-async function requestJson(url) {
-  return JSON.parse(await requestText(url));
+async function requestJson(url, attempts = 3) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const text = await requestText(url);
+      if (!String(text || "").trim()) throw new Error("Empty response from Aster API");
+      return JSON.parse(text);
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await sleep(350 * (attempt + 1));
+      }
+    }
+  }
+  throw lastError;
 }
 
-function batchFetch(kind, symbols, options = {}) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function batchFetch(kind, symbols, options = {}) {
   const uniqueSymbols = [...new Set(symbols.filter(Boolean))];
   if (!uniqueSymbols.length) return {};
-  const args = [
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    path.join(root, "fetch-aster-batch.ps1"),
-    kind,
-    uniqueSymbols.join(","),
-  ];
-  if (options.startTime || options.endTime || options.limit) {
-    args.push(
-      String(options.startTime || ""),
-      String(options.endTime || ""),
-      String(options.limit || "8"),
-      String(options.pauseMs || "0"),
-    );
+
+  const result = {};
+  await mapWithConcurrency(
+    uniqueSymbols,
+    8,
+    async (symbol) => {
+      try {
+        let url;
+        if (kind === "funding") {
+          url = new URL("/fapi/v1/fundingRate", ASTER);
+          url.searchParams.set("symbol", symbol);
+          url.searchParams.set("limit", String(options.limit || "8"));
+          if (options.startTime) url.searchParams.set("startTime", String(options.startTime));
+          if (options.endTime) url.searchParams.set("endTime", String(options.endTime));
+        } else if (kind === "openInterest") {
+          url = new URL("/fapi/v1/openInterest", ASTER);
+          url.searchParams.set("symbol", symbol);
+        } else {
+          throw new Error(`Unknown batch kind: ${kind}`);
+        }
+        result[symbol] = await requestJson(url.toString());
+      } catch (error) {
+        result[symbol] = null;
+      }
+    },
+  );
+
+  const pauseMs = Number(options.pauseMs) || 0;
+  if (pauseMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, pauseMs));
   }
 
-  return new Promise((resolve) => {
-    execFile(
-      "powershell.exe",
-      args,
-      { timeout: 120000, maxBuffer: 1024 * 1024 * 64 },
-      (error, stdout) => {
-        if (error) {
-          resolve({});
-          return;
-        }
-        try {
-          resolve(JSON.parse(stdout || "{}"));
-        } catch (parseError) {
-          resolve({});
-        }
-      },
-    );
-  });
+  return result;
 }
 
 async function proxyFunding(res, requestUrl) {
