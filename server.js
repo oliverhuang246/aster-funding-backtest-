@@ -9,7 +9,9 @@ const port = Number(process.env.PORT || 4173);
 const ASTER = "https://fapi.asterdex.com";
 const marketCache = new Map();
 const fundingHistoryCache = new Map();
+let fundingInfoCache = null;
 const FUNDING_HISTORY_TTL = 10 * 60 * 1000;
+const FUNDING_INFO_TTL = 55 * 1000;
 const types = {
   ".html": "text/html;charset=utf-8",
   ".css": "text/css;charset=utf-8",
@@ -173,9 +175,10 @@ async function marketStats(res, requestUrl) {
   }
 
   try {
-    const [premium, ticker] = await Promise.all([
+    const [premium, ticker, fundingInfoMap] = await Promise.all([
       requestJson(`${ASTER}/fapi/v1/premiumIndex`),
       requestJson(`${ASTER}/fapi/v1/ticker/24hr`),
+      getFundingInfoMap(),
     ]);
 
     const tickerMap = new Map(
@@ -191,7 +194,8 @@ async function marketStats(res, requestUrl) {
         const fundingRate = Number(row.lastFundingRate) || 0;
         const price = Number(tickerRow.lastPrice || row.markPrice || row.indexPrice || 0);
         const openInterest = Number(row.openInterest || 0);
-        const fallbackInterval = inferIntervalHours(row);
+        const configuredInterval = fundingInfoMap.get(symbol)?.fundingIntervalHours;
+        const fallbackInterval = normalizeIntervalHours(configuredInterval) || inferIntervalHours(row);
         return {
           symbol,
           price,
@@ -266,7 +270,7 @@ async function marketStats(res, requestUrl) {
         return;
       }
       const exactInterval = inferIntervalFromHistory(history);
-      if (exactInterval) {
+      if (!fundingInfoMap.has(row.symbol) && exactInterval) {
         row.intervalHours = exactInterval;
       }
       row.annualized = row.fundingRate * (24 / row.intervalHours) * 365;
@@ -314,10 +318,16 @@ async function contractMeta(res, requestUrl) {
   try {
     const premiumUrl = new URL("/fapi/v1/premiumIndex", ASTER);
     premiumUrl.searchParams.set("symbol", symbol);
-    const premium = await requestJson(premiumUrl.toString());
+    const [premium, fundingInfo] = await Promise.all([
+      requestJson(premiumUrl.toString()),
+      getFundingInfo(symbol),
+    ]);
     const now = Number(premium.time) || Date.now();
     const history = await fundingHistory(symbol, now - 10 * 86400000, now);
-    const intervalHours = inferIntervalFromHistory(history) || inferIntervalHours(premium);
+    const intervalHours =
+      normalizeIntervalHours(fundingInfo?.fundingIntervalHours) ||
+      inferIntervalFromHistory(history) ||
+      inferIntervalHours(premium);
     send(
       res,
       200,
@@ -349,9 +359,10 @@ async function marketSymbol(res, requestUrl) {
   }
 
   try {
-    const [premium, ticker] = await Promise.all([
+    const [premium, ticker, fundingInfo] = await Promise.all([
       requestJson(`${ASTER}/fapi/v1/premiumIndex?symbol=${encodeURIComponent(symbol)}`),
       requestJson(`${ASTER}/fapi/v1/ticker/24hr?symbol=${encodeURIComponent(symbol)}`),
+      getFundingInfo(symbol),
     ]);
 
     if (!premium?.symbol) {
@@ -367,7 +378,10 @@ async function marketSymbol(res, requestUrl) {
     const start7d = now - 7 * 86400000;
     const history = await fundingHistory(symbol, start30d, now);
     const fallbackInterval = inferIntervalHours(premium);
-    const intervalHours = inferIntervalFromHistory(history) || fallbackInterval;
+    const intervalHours =
+      normalizeIntervalHours(fundingInfo?.fundingIntervalHours) ||
+      inferIntervalFromHistory(history) ||
+      fallbackInterval;
     const fundingRate = Number(premium.lastFundingRate) || 0;
     const price = Number(ticker.lastPrice || premium.markPrice || premium.indexPrice || 0);
     const openInterest = await fetchOpenInterest(symbol).catch(() => 0);
@@ -426,6 +440,43 @@ function inferIntervalHours(row) {
     if (hoursToNext <= 4.5) return 4;
   }
   return 8;
+}
+
+function normalizeIntervalHours(value) {
+  const hours = Number(value);
+  return Number.isFinite(hours) && hours > 0 && hours <= 24 ? hours : null;
+}
+
+async function getFundingInfoMap() {
+  if (fundingInfoCache && Date.now() - fundingInfoCache.time < FUNDING_INFO_TTL) {
+    return fundingInfoCache.map;
+  }
+
+  try {
+    const payload = await requestJson(`${ASTER}/fapi/v1/fundingInfo`);
+    const rows = Array.isArray(payload) ? payload : [payload];
+    const map = new Map();
+    rows.forEach((row) => {
+      const symbol = cleanSymbol(row?.symbol);
+      const fundingIntervalHours = normalizeIntervalHours(row?.fundingIntervalHours);
+      if (symbol && fundingIntervalHours) {
+        map.set(symbol, {
+          ...row,
+          symbol,
+          fundingIntervalHours,
+        });
+      }
+    });
+    fundingInfoCache = { time: Date.now(), map };
+    return map;
+  } catch (error) {
+    return fundingInfoCache?.map || new Map();
+  }
+}
+
+async function getFundingInfo(symbol) {
+  const map = await getFundingInfoMap();
+  return map.get(cleanSymbol(symbol)) || null;
 }
 
 function inferIntervalFromHistory(history) {
